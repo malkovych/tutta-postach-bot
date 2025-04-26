@@ -5,6 +5,7 @@ import os
 import json
 import logging
 import pandas as pd
+import db_mysql as db
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -50,193 +51,15 @@ db = {
     "suppliers": {}
 }
 
-# Завантаження даних із файлу, якщо він існує
-def load_db():
-    global db
-    if os.path.exists(DATABASE_FILE):
-        with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
-            db = json.load(f)
-    
-    # Завантаження продуктів з Excel файлу, якщо вони ще не завантажені
-    if not db["products"]:
-        load_products_from_excel()
-
-# Завантаження продуктів (фіксовані категорії та продукти)
-def load_products_from_excel():
-    global db
-    logger.info("Використовуємо вбудований список продуктів замість Excel-файлу")
-    
-    # Підготовлений список категорій та продуктів
-    db["products"] = {
-         "Метро": [
-            "Креветки", 
-            "Соус кисло-солодкий", 
-            "Соус брусничний", 
-            "Соус сирний",
-            "Соус BBQ",
-            "Картопля фрі",
-            "Гірчиця американська",
-            "Кетчуп лагідний проф.",
-            "Цибуля Кранч",
-            "Соусничка",
-            "Конверт фрі",
-            "Конверт кебаб"
-            "Чай ріоба",
-            "Заморожене тісто листкове"
-        ],
-        "М'ясо": [
-            "Куряче філе", 
-            "Яловичина", 
-            "Фарш мікс", 
-            "Індичка",
-            "Куряче стегно",
-            "Курячі крильця",
-            "Яловича щока",
-            "Телятина",
-        ],
-        "М'ясні продукти": [
-            "Шинка", 
-            "Бекон", 
-            "Чорізо", 
-            "Чорізо гостре",
-            "Кабаноси",
-            "Прошуто",
-        ],
-        "Сири, молокопродукти": [
-            "Моцарела", 
-            "Пармезан", 
-            "Дорблю", 
-            "Чеддер", 
-            "Філадельфія",
-            "Вершкове масло",
-            "Молоко",
-        ],
-        "Консерви": [
-            "Огірок маринований", 
-            "Ананас шматочки", 
-            "Персик конвервований ", 
-            "Фасоля консервована",
-            "Кукурудза солодка",
-            "Артишоки",
-            "Каперси",
-            "Вершки балончик",
-            "Оливка чорна бк", 
-            "Перець Халапеньо", 
-            "SWEET CHILI", 
-            "SWEET CHILI гострий", 
-        ],
-        "Бакалія та олія": [
-            "Борошно", 
-            "Пелаті", 
-            "Дріжджі",
-            "Цукор",
-            "Сіль",
-            "Оливкова олія", 
-            "Олія Соняшник", 
-            "Оцет", 
-            "Соус соєвий", 
-            "Яйця курячі", 
-        ],
-        "Овочі": [
-            "Томати чері", 
-            "Часник", 
-            "Перець", 
-            "Цибуля синя",
-            "Картопля",
-            "Морква",
-            "Цибуля біла",
-            "Печериця",
-        ],
-        "Фрукти": [
-            "Груша", 
-            "Апельсини", 
-            "Лимони",
-            "Лайм",
-        ],
-        "Зелень": [
-            "Петрушка", 
-            "Айсберг салат", 
-            "Базилік", 
-            "Рукола", 
-            "Шпинат",
-            "Салат зелений лоло",
-            "М'ята",
-            "Розмарин",
-            "Чебрець"
-        ],
-        "Напої": [
-            "Вода", 
-            "Сік", 
-            "Кава", 
-            "Чай", 
-            "Газовані напої Пепсі",
-            "Мінеральна вода",
-            "Вода на Лимонад",
-            "Пиво БА",
-            "Какао",
-            "Соки Капрізон"
-        ],
-        "Соуси": [
-            "Кетчуп", 
-            "Майонез", 
-            "Гірчиця", 
-            "Соєвий соус",
-            "Томатна паста",
-            "Соус песто",
-            "Сальса",
-            "Соус ягідний",
-            "Соус барбекю",
-            "Устричний соус"
-        ],
-        "Сухі продукти": [
-            "Паста Букатіні", 
-            "Локшина", 
-            "Папір для випічки", 
-            "Приправа курка", 
-            "Приправа фарш", 
-            "Карі", 
-            "Какао",
-            "Кава зерно",
-            "Приправи до Бешамель",
-            "Сухофрукти",
-            "Насіння гарбуз",
-            "Приправи",
-            "Кунжут",
-        ],
-        "Хімія та госптовари": [
-            "Ланч бокс паста", 
-            "Ланч бокс салат", 
-            "Пергамент", 
-            "Миючий засіб", 
-            "Рукавички", 
-            "Папір для випічки", 
-            "Губки", 
-            "Серветки",
-            "Пакети для сміття",
-            "Харчова плівка",
-            "Фольга",
-            "Засіб для посуду",
-            "Паперові рушники"
-            "Пакет на виніс", 
-            "", 
-        ],
-    }
-    
-    # Зберігаємо оновлену базу даних
-    save_db()
-    logger.info(f"Завантажено {len(db['products'])} категорій продуктів")
-# Збереження даних у файл
-def save_db():
-    with open(DATABASE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(db, f, ensure_ascii=False, indent=2)
-
 # Початок роботи з ботом та реєстрація
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     user_id = str(user.id)
     
     # Перевіряємо, чи користувач вже зареєстрований
-    if user_id in db["users"]:
+    user_data = db.get_user(user_id)
+    
+    if user_data:
         return await show_main_menu(update, context)
     else:
         # Пропонуємо обрати роль
@@ -253,7 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         
         return REGISTRATION_ROLE
-
+        
 # Обробка вибору ролі
 async def register_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -266,13 +89,7 @@ async def register_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     role = "kitchen" if data == "role_kitchen" else "supplier"
     
     # Створюємо нового користувача
-    db["users"][user_id] = {
-        "name": user.first_name,
-        "username": user.username,
-        "role": role,
-        "current_order": None,
-        "registration_date": datetime.now().isoformat()
-    }
+    db.create_user(user_id, user.first_name, user.username, role)
     
     if role == "supplier":
         # Для постачальника пропонуємо обрати категорії
@@ -283,8 +100,7 @@ async def register_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await show_supplier_categories(update, context)
     else:
         # Для працівника кухні показуємо головне меню
-        db["users"][user_id]["is_registered"] = True
-        save_db()
+        db.update_user(user_id, {"is_registered": True})
         
         await query.edit_message_text(
             f"Ви успішно зареєстровані як працівник кухні (Tutta Team)!\n\n"
