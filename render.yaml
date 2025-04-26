@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: tutta-postach-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        value: "7973829035:AAHylWqTFczrGNkqhpOQcGUK1BqjhV3ogeM"
