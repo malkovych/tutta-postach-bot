@@ -861,6 +861,13 @@ def main() -> None:
     # Створюємо застосунок і передаємо йому токен нашого бота
     application = Application.builder().token(TOKEN).build()
     
+    # Перевіряємо підключення до бази даних
+    if hasattr(db, 'test_connection'):
+        if db.test_connection():
+            logger.info("Підключення до бази даних успішне")
+        else:
+            logger.error("Не вдалося підключитися до бази даних")
+    
     # Завантажуємо дані
     load_db()
     
