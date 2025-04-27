@@ -4,6 +4,11 @@ import mysql.connector
 from datetime import datetime
 from mysql.connector import Error
 
+# Налаштування логування
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # Налаштування з'єднання з базою даних
@@ -15,6 +20,7 @@ DB_CONFIG = {
     'charset': 'utf8mb4',
     'use_unicode': True
 }
+
 # Функція для з'єднання з базою даних
 def get_connection():
     try:
@@ -23,6 +29,17 @@ def get_connection():
     except Error as e:
         logger.error(f"Помилка з'єднання з базою даних: {e}")
         return None
+
+# Перевірити підключення до бази даних
+def test_connection():
+    conn = get_connection()
+    if conn and conn.is_connected():
+        logger.info("З'єднання з базою даних успішне")
+        conn.close()
+        return True
+    else:
+        logger.error("Не вдалося з'єднатися з базою даних")
+        return False
 
 # Функції для роботи з користувачами
 def get_user(user_id):
@@ -174,6 +191,51 @@ def get_supplier_categories(supplier_id):
         return categories
     except Error as e:
         logger.error(f"Помилка отримання категорій постачальника: {e}")
+        return []
+    finally:
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
+
+def get_all_suppliers():
+    conn = get_connection()
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT s.id, s.user_id, s.name, s.phone 
+            FROM suppliers s
+            WHERE s.active = TRUE
+        """)
+        
+        suppliers = cursor.fetchall()
+        
+        # Отримуємо категорії для кожного постачальника
+        for supplier in suppliers:
+            supplier['categories'] = get_supplier_categories(supplier['id'])
+        
+        return suppliers
+    except Error as e:
+        logger.error(f"Помилка отримання списку постачальників: {e}")
+        return []
+    finally:
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
+
+def get_suppliers():
+    conn = get_connection()
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, user_id, name, phone FROM suppliers WHERE active = TRUE")
+        return cursor.fetchall()
+    except Error as e:
+        logger.error(f"Помилка отримання постачальників: {e}")
         return []
     finally:
         if conn.is_connected():
@@ -509,31 +571,34 @@ def get_relevant_orders_for_supplier(user_id):
             return []
         
         # Знайти замовлення зі статусом 'confirmed', які містять товари з категорій постачальника
-        orders = []
-        
-        # Отримати всі підтверджені замовлення
-        cursor.execute("""
+        placeholders = ', '.join(['%s'] * len(categories))
+        query = f"""
             SELECT DISTINCT o.id, o.type, o.user_id, o.user_name, o.date, o.confirmation_date, o.status
             FROM orders o
             JOIN order_items oi ON o.id = oi.order_id
             JOIN products p ON oi.product_id = p.id
             JOIN categories c ON p.category_id = c.id
-            WHERE o.status = 'confirmed' AND c.name IN ({})
-        """.format(','.join(['%s'] * len(categories))), categories)
+            WHERE o.status = 'confirmed' AND c.name IN ({placeholders})
+        """
         
-        order_data = cursor.fetchall()
+        cursor.execute(query, categories)
+        orders = cursor.fetchall()
         
         # Для кожного замовлення отримати тільки товари з категорій постачальника
-        for order in order_data:
+        for order in orders:
             order_id = order['id']
             
-            cursor.execute("""
+            placeholders = ', '.join(['%s'] * (len(categories) + 1))
+            query = f"""
                 SELECT c.name as category, p.name as product
                 FROM order_items oi
                 JOIN products p ON oi.product_id = p.id
                 JOIN categories c ON p.category_id = c.id
-                WHERE oi.order_id = %s AND c.name IN ({})
-            """.format(','.join(['%s'] * len(categories))), [order_id] + categories)
+                WHERE oi.order_id = %s AND c.name IN ({placeholders})
+            """
+            
+            params = [order_id] + categories
+            cursor.execute(query, params)
             
             items = cursor.fetchall()
             
@@ -548,55 +613,11 @@ def get_relevant_orders_for_supplier(user_id):
                 
                 order_items[category].append(product)
             
-            # Додати тільки категорії, які стосуються постачальника
-            filtered_items = {cat: prods for cat, prods in order_items.items() if cat in categories}
-            order['items'] = filtered_items
-            
-            # Додати замовлення тільки якщо воно містить товари з категорій постачальника
-            if filtered_items:
-                orders.append(order)
+            order['items'] = order_items
         
         return orders
     except Error as e:
         logger.error(f"Помилка отримання замовлень для постачальника: {e}")
-        return []
-    finally:
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
-
-# Перевірити підключення до бази даних
-def test_connection():
-    conn = get_connection()
-    if conn and conn.is_connected():
-        logger.info("З'єднання з базою даних успішне")
-        conn.close()
-        return True
-    else:
-        logger.error("Не вдалося з'єднатися з базою даних")
-        return False
-def get_all_suppliers():
-    conn = get_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT s.id, s.user_id, s.name, s.phone 
-            FROM suppliers s
-            WHERE s.active = TRUE
-        """)
-        
-        suppliers = cursor.fetchall()
-        
-        # Отримуємо категорії для кожного постачальника
-        for supplier in suppliers:
-            supplier['categories'] = get_supplier_categories(supplier['id'])
-        
-        return suppliers
-    except Error as e:
-        logger.error(f"Помилка отримання списку постачальників: {e}")
         return []
     finally:
         if conn.is_connected():
