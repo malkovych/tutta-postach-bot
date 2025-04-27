@@ -262,7 +262,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, new
     user_data = db.get_user(user_id)
     
     if not user_data or not user_data.get("is_registered", False):
-        if hasattr(update, "message"):
+        if hasattr(update, "message") and update.message:
             await update.message.reply_text(
                 "Ви не зареєстровані. Будь ласка, почніть з команди /start"
             )
@@ -306,13 +306,20 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, new
             reply_markup=reply_markup
         )
     else:
-        if hasattr(update, "callback_query"):
+        # Перевіряємо тип оновлення і відправляємо повідомлення відповідно
+        if hasattr(update, "callback_query") and update.callback_query:
             await update.callback_query.edit_message_text(
                 text=message_text,
                 reply_markup=reply_markup
             )
-        else:
+        elif hasattr(update, "message") and update.message:
             await update.message.reply_text(
+                text=message_text,
+                reply_markup=reply_markup
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
                 text=message_text,
                 reply_markup=reply_markup
             )
