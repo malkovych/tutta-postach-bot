@@ -8,14 +8,13 @@ logger = logging.getLogger(__name__)
 
 # Налаштування з'єднання з базою даних
 DB_CONFIG = {
-    'host': 'rav4.cityhost.com.ua',
-    'database': 'chf1f5f332_tutta-postach',
-    'user': 'chf1f5f332_tutta-postach',
-    'password': 'WYwum33Tma',
+    'host': os.environ.get('DB_HOST', 'rav4.cityhost.com.ua'),
+    'database': os.environ.get('DB_NAME', 'chf1f5f332_tutta-postach'),
+    'user': os.environ.get('DB_USER', 'chf1f5f332_tutta-postach'),
+    'password': os.environ.get('DB_PASSWORD', 'WYwum33Tma'),
     'charset': 'utf8mb4',
     'use_unicode': True
 }
-
 # Функція для з'єднання з базою даних
 def get_connection():
     try:
