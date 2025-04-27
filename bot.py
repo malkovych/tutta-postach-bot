@@ -684,7 +684,7 @@ async def add_selected_products(update: Update, context: ContextTypes.DEFAULT_TY
     # Отримуємо обрані продукти
     selected_products = context.user_data["selected_products"][category]
     
-   if not selected_products:
+    if not selected_products:
         await query.edit_message_text(
             "Ви не обрали жодного продукту. Будь ласка, оберіть продукти перед додаванням.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data=f"category_{category}")]])
