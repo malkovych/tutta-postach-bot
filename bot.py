@@ -908,17 +908,37 @@ def get_status_emoji(status: str) -> str:
 
 # Команда "допомога"
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "*Бот для замовлення продуктів на кухню*\n\n"
+    query = update.callback_query
+    message_text = (
+        "*🤖 Бот для замовлення продуктів на кухню*\n\n"
         "Команди:\n"
         "/start - Почати роботу з ботом\n"
+        "/menu - Показати головне меню\n"
         "/help - Отримати довідку\n\n"
         "Типи замовлень:\n"
         "🗓 *Планове* - тижневі замовлення, які збираються по суботах\n"
         "⚡ *Термінове* - для негайних потреб\n\n"
-        "Якщо у вас виникли питання, зверніться до адміністратора.",
-        parse_mode="Markdown"
+        "Підказки:\n"
+        "• Ви можете обрати кілька продуктів одночасно в кожній категорії\n"
+        "• Для видалення продукту з замовлення використовуйте команди з повідомлення замовлення\n"
+        "• Працівники кухні можуть бачити список постачальників з контактами\n\n"
+        "Якщо у вас виникли питання, зверніться до адміністратора."
     )
+    
+    keyboard = [[InlineKeyboardButton("🏠 На головну", callback_data="home")]]
+    
+    if query:
+        await query.edit_message_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
 
 # Обробка невідомих повідомлень
 async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -930,6 +950,15 @@ async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 def main() -> None:
     # Створюємо застосунок і передаємо йому токен нашого бота
     application = Application.builder().token(TOKEN).build()
+    # Додаємо обробники
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("menu", menu_command))  # Додаємо команду для меню
+    application.add_handler(MessageHandler(filters.COMMAND & filters.Regex("^/remove_"), remove_product))
+    application.add_handler(CallbackQueryHandler(go_home, pattern="^home$"))
+    application.add_handler(CallbackQueryHandler(show_suppliers_list, pattern="^suppliers_list$"))  # Додаємо обробник списку постачальників
+    application.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))  # Обробник кнопки допомоги
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
     
     # Перевіряємо підключення до бази даних
     if hasattr(db, 'test_connection'):
