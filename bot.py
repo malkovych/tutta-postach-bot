@@ -281,7 +281,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, new
         keyboard = [
             [InlineKeyboardButton("🗓 Планове (тижневе)", callback_data="new_order_planned")],
             [InlineKeyboardButton("⚡ Термінове", callback_data="new_order_urgent")],
-            [InlineKeyboardButton("📋 Мої замовлення", callback_data="my_orders")]
+            [InlineKeyboardButton("📋 Мої замовлення", callback_data="my_orders")],
+            [InlineKeyboardButton("📞 Список постачальників", callback_data="suppliers_list")],
+            [InlineKeyboardButton("❓ Допомога", callback_data="help")]
         ]
         
         message_text = "Головне меню:\n\nОберіть тип замовлення:"
@@ -289,7 +291,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, new
         # Меню для постачальника
         keyboard = [
             [InlineKeyboardButton("📋 Активні замовлення", callback_data="supplier_active_orders")],
-            [InlineKeyboardButton("⚙️ Налаштування", callback_data="supplier_settings")]
+            [InlineKeyboardButton("⚙️ Налаштування", callback_data="supplier_settings")],
+            [InlineKeyboardButton("❓ Допомога", callback_data="help")]
         ]
         
         message_text = "Головне меню постачальника:"
@@ -313,6 +316,97 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, new
                 text=message_text,
                 reply_markup=reply_markup
             )
+    
+    return MAIN_MENU
+
+# Показ головного меню з командами
+async def show_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query:
+        await query.answer()
+        chat_id = query.message.chat_id
+    else:
+        chat_id = update.effective_chat.id
+    
+    user_id = str(update.effective_user.id)
+    user_data = db.get_user(user_id)
+    
+    # Перевіряємо роль користувача
+    is_kitchen = user_data and user_data.get("role") == "kitchen"
+    
+    keyboard = [
+        [InlineKeyboardButton("🏠 Головне меню", callback_data="home")],
+        [InlineKeyboardButton("❓ Допомога", callback_data="help")]
+    ]
+    
+    # Додаємо кнопку для перегляду постачальників лише для працівників кухні
+    if is_kitchen:
+        keyboard.insert(0, [InlineKeyboardButton("📞 Список постачальників", callback_data="suppliers_list")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if query:
+        await query.edit_message_text(
+            "Виберіть дію з меню:",
+            reply_markup=reply_markup
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Виберіть дію з меню:",
+            reply_markup=reply_markup
+        )
+    
+    return MAIN_MENU
+
+# Команда для відображення меню
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return await show_commands_menu(update, context)
+
+# Показ списку постачальників для кухні
+async def show_suppliers_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(query.from_user.id)
+    user_data = db.get_user(user_id)
+    
+    # Перевіряємо, чи користувач є працівником кухні
+    if not user_data or user_data.get("role") != "kitchen":
+        await query.edit_message_text(
+            "У вас немає доступу до цього розділу.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
+        )
+        return MAIN_MENU
+    
+    # Отримуємо всіх постачальників
+    suppliers = db.get_all_suppliers()
+    
+    if not suppliers:
+        await query.edit_message_text(
+            "Наразі немає зареєстрованих постачальників.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
+        )
+        return MAIN_MENU
+    
+    message = "*📞 Список постачальників:*\n\n"
+    
+    for idx, supplier in enumerate(suppliers):
+        message += f"*{idx+1}. {supplier['name']}*\n"
+        message += f"📱 Телефон: {supplier.get('phone', 'Не вказано')}\n"
+        
+        # Отримуємо категорії постачальника
+        categories = supplier.get('categories', [])
+        if categories:
+            message += f"🛒 Категорії: {', '.join(categories)}\n"
+        
+        message += "\n"
+    
+    await query.edit_message_text(
+        message,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]]),
+        parse_mode="Markdown"
+    )
     
     return MAIN_MENU
 
@@ -590,7 +684,7 @@ async def add_selected_products(update: Update, context: ContextTypes.DEFAULT_TY
     # Отримуємо обрані продукти
     selected_products = context.user_data["selected_products"][category]
     
-    if not selected_products:
+   if not selected_products:
         await query.edit_message_text(
             "Ви не обрали жодного продукту. Будь ласка, оберіть продукти перед додаванням.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data=f"category_{category}")]])
@@ -934,11 +1028,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
+        if hasattr(update, "message"):
+            await update.message.reply_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
 
 # Обробка невідомих повідомлень
 async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -976,7 +1078,8 @@ def main() -> None:
                 CallbackQueryHandler(new_order, pattern="^new_order_|^supplier_"),
                 CallbackQueryHandler(view_my_orders, pattern="^my_orders$"),
                 CallbackQueryHandler(go_home, pattern="^home$"),
-                CallbackQueryHandler(show_suppliers_list, pattern="^suppliers_list$")
+                CallbackQueryHandler(show_suppliers_list, pattern="^suppliers_list$"),
+                CallbackQueryHandler(help_command, pattern="^help$")
             ],
             SELECTING_CATEGORY: [
                 CallbackQueryHandler(show_products_in_category, pattern="^category_"),
@@ -1013,108 +1116,6 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(go_home, pattern="^home$"))
     application.add_handler(CallbackQueryHandler(show_suppliers_list, pattern="^suppliers_list$"))
     application.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
-    
-    # Запускаємо бота
-    print("Бот запущено!")
-    application.run_polling()
-
-# Показ головного меню з командами
-async def show_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if query:
-        await query.answer()
-        chat_id = query.message.chat_id
-    else:
-        chat_id = update.effective_chat.id
-    
-    user_id = str(update.effective_user.id)
-    user_data = db.get_user(user_id)
-    
-    # Перевіряємо роль користувача
-    is_kitchen = user_data and user_data.get("role") == "kitchen"
-    
-    keyboard = [
-        [InlineKeyboardButton("🏠 Головне меню", callback_data="home")],
-        [InlineKeyboardButton("❓ Допомога", callback_data="help")]
-    ]
-    
-    # Додаємо кнопку для перегляду постачальників лише для працівників кухні
-    if is_kitchen:
-        keyboard.insert(0, [InlineKeyboardButton("📞 Список постачальників", callback_data="suppliers_list")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if query:
-        await query.edit_message_text(
-            "Виберіть дію з меню:",
-            reply_markup=reply_markup
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Виберіть дію з меню:",
-            reply_markup=reply_markup
-        )
-    
-    return MAIN_MENU
-
-# Команда для відображення меню
-async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    return await show_commands_menu(update, context)
-
-# Показ списку постачальників для кухні
-async def show_suppliers_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = str(query.from_user.id)
-    user_data = db.get_user(user_id)
-    
-    # Перевіряємо, чи користувач є працівником кухні
-    if not user_data or user_data.get("role") != "kitchen":
-        await query.edit_message_text(
-            "У вас немає доступу до цього розділу.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
-        )
-        return MAIN_MENU
-    
-    # Отримуємо всіх постачальників
-    suppliers = db.get_all_suppliers()
-    
-    if not suppliers:
-        await query.edit_message_text(
-            "Наразі немає зареєстрованих постачальників.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
-        )
-        return MAIN_MENU
-    
-    message = "*📞 Список постачальників:*\n\n"
-    
-    for idx, supplier in enumerate(suppliers):
-        message += f"*{idx+1}. {supplier['name']}*\n"
-        message += f"📱 Телефон: {supplier.get('phone', 'Не вказано')}\n"
-        
-        # Отримуємо категорії постачальника
-        categories = supplier.get('categories', [])
-        if categories:
-            message += f"🛒 Категорії: {', '.join(categories)}\n"
-        
-        message += "\n"
-    
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]]),
-        parse_mode="Markdown"
-    )
-    
-    return MAIN_MENU
-    
-    # Додаємо обробники
-    application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.COMMAND & filters.Regex("^/remove_"), remove_product))
-    application.add_handler(CallbackQueryHandler(go_home, pattern="^home$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
     
     # Запускаємо бота
