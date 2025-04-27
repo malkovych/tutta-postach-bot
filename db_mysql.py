@@ -575,3 +575,30 @@ def test_connection():
     else:
         logger.error("Не вдалося з'єднатися з базою даних")
         return False
+def get_all_suppliers():
+    conn = get_connection()
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT s.id, s.user_id, s.name, s.phone 
+            FROM suppliers s
+            WHERE s.active = TRUE
+        """)
+        
+        suppliers = cursor.fetchall()
+        
+        # Отримуємо категорії для кожного постачальника
+        for supplier in suppliers:
+            supplier['categories'] = get_supplier_categories(supplier['id'])
+        
+        return suppliers
+    except Error as e:
+        logger.error(f"Помилка отримання списку постачальників: {e}")
+        return []
+    finally:
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
