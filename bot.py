@@ -482,7 +482,7 @@ async def show_categories(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     return SELECTING_CATEGORY
 
-# Показ продуктів у категорії
+# Показ продуктів у категорії з чекбоксами
 async def show_products_in_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -494,31 +494,42 @@ async def show_products_in_category(update: Update, context: ContextTypes.DEFAUL
     categories = db.get_categories()
     products = categories.get(category, [])
     
+    # Ініціалізуємо список обраних продуктів, якщо його ще немає
+    if "selected_products" not in context.user_data:
+        context.user_data["selected_products"] = {}
+    
+    if category not in context.user_data["selected_products"]:
+        context.user_data["selected_products"][category] = []
+    
     keyboard = []
     
-    # Створення кнопок для кожного продукту
+    # Створення кнопок для кожного продукту з чекбоксами
     for idx, product in enumerate(products):
-        keyboard.append([InlineKeyboardButton(product, callback_data=f"add_{idx}")])
+        # Визначаємо, чи обраний продукт
+        is_selected = product in context.user_data["selected_products"][category]
+        button_text = f"✅ {product}" if is_selected else f"⬜ {product}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"select_{idx}")])
     
+    # Додаткові кнопки для управління
+    keyboard.append([InlineKeyboardButton("✅ Додати обрані продукти", callback_data="add_selected")])
     keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="back_to_categories")])
     keyboard.append([InlineKeyboardButton("📝 Переглянути поточне замовлення", callback_data="view_current_order")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        text=f"Оберіть продукти з категорії \"{category}\":",
+        text=f"Оберіть продукти з категорії \"{category}\":\n(можна обрати декілька, потім натисніть 'Додати обрані продукти')",
         reply_markup=reply_markup
     )
     
     return SELECTING_PRODUCT
 
-# Додавання продукту до замовлення
-async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# Обробка вибору продукту через чекбокс
+async def select_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     
-    user_id = str(query.from_user.id)
-    product_idx = int(query.data.replace("add_", ""))
+    product_idx = int(query.data.replace("select_", ""))
     category = context.user_data.get("current_category")
     
     if not category:
@@ -528,18 +539,7 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         )
         return MAIN_MENU
     
-    # Отримуємо поточне замовлення користувача
-    user_data = db.get_user(user_id)
-    order_id = user_data.get("current_order")
-    
-    if not order_id:
-        await query.edit_message_text(
-            "Помилка: Немає активного замовлення. Створіть нове замовлення.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
-        )
-        return MAIN_MENU
-    
-    # Отримуємо продукт за індексом
+    # Отримуємо продукти категорії
     categories = db.get_categories()
     products = categories.get(category, [])
     
@@ -552,45 +552,79 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     product = products[product_idx]
     
-    # Перевіряємо замовлення
-    order = db.get_order(order_id)
-    if not order:
+    # Перемикаємо стан обраного продукту
+    if product in context.user_data["selected_products"][category]:
+        context.user_data["selected_products"][category].remove(product)
+    else:
+        context.user_data["selected_products"][category].append(product)
+    
+    # Оновлюємо інтерфейс з чекбоксами
+    return await show_products_in_category(update, context)
+
+# Додавання обраних продуктів до замовлення
+async def add_selected_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(query.from_user.id)
+    category = context.user_data.get("current_category")
+    
+    if not category or "selected_products" not in context.user_data or category not in context.user_data["selected_products"]:
         await query.edit_message_text(
-            "Помилка: Замовлення не знайдено.",
+            "Помилка: не вибрано жодного продукту.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data=f"category_{category}")]])
+        )
+        return SELECTING_CATEGORY
+    
+    # Отримуємо поточне замовлення користувача
+    user_data = db.get_user(user_id)
+    order_id = user_data.get("current_order")
+    
+    if not order_id:
+        await query.edit_message_text(
+            "Помилка: Немає активного замовлення. Створіть нове замовлення.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
         )
         return MAIN_MENU
     
-    # Перевіряємо, чи вже є такий продукт у замовленні
-    is_product_in_order = False
-    if category in order["items"] and product in order["items"][category]:
-        is_product_in_order = True
+    # Отримуємо обрані продукти
+    selected_products = context.user_data["selected_products"][category]
     
-    if not is_product_in_order:
-        # Додаємо продукт до замовлення
-        db.add_order_item(order_id, category, product)
-        
-        keyboard = [
-            [InlineKeyboardButton("➕ Додати ще з цієї категорії", callback_data=f"category_{category}")],
-            [InlineKeyboardButton("📋 Обрати іншу категорію", callback_data="back_to_categories")],
-            [InlineKeyboardButton("📝 Переглянути поточне замовлення", callback_data="view_current_order")]
-        ]
-        
+    if not selected_products:
         await query.edit_message_text(
-            f"✅ Додано \"{product}\" до замовлення.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "Ви не обрали жодного продукту. Будь ласка, оберіть продукти перед додаванням.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data=f"category_{category}")]])
         )
-    else:
-        keyboard = [
-            [InlineKeyboardButton("➕ Додати інший товар з цієї категорії", callback_data=f"category_{category}")],
-            [InlineKeyboardButton("📋 Обрати іншу категорію", callback_data="back_to_categories")],
-            [InlineKeyboardButton("📝 Переглянути поточне замовлення", callback_data="view_current_order")]
-        ]
+        return SELECTING_CATEGORY
+    
+    # Додаємо продукти до замовлення
+    added_count = 0
+    for product in selected_products:
+        # Перевіряємо, чи вже є такий продукт у замовленні
+        order = db.get_order(order_id)
+        is_product_in_order = False
         
-        await query.edit_message_text(
-            f"❗ \"{product}\" вже є у вашому замовленні.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        if category in order["items"] and product in order["items"][category]:
+            is_product_in_order = True
+        
+        if not is_product_in_order:
+            # Додаємо продукт до замовлення
+            if db.add_order_item(order_id, category, product):
+                added_count += 1
+    
+    # Очищаємо список обраних продуктів
+    context.user_data["selected_products"][category] = []
+    
+    # Повідомляємо про результат
+    keyboard = [
+        [InlineKeyboardButton("📋 Обрати іншу категорію", callback_data="back_to_categories")],
+        [InlineKeyboardButton("📝 Переглянути поточне замовлення", callback_data="view_current_order")]
+    ]
+    
+    await query.edit_message_text(
+        f"✅ Додано {added_count} продуктів з категорії \"{category}\" до замовлення.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     
     return SELECTING_CATEGORY
 
@@ -929,7 +963,8 @@ def main() -> None:
                 CallbackQueryHandler(go_home, pattern="^home$")
             ],
             SELECTING_PRODUCT: [
-                CallbackQueryHandler(add_product, pattern="^add_"),
+                CallbackQueryHandler(select_product, pattern="^select_"),
+                CallbackQueryHandler(add_selected_products, pattern="^add_selected$"),
                 CallbackQueryHandler(back_to_categories, pattern="^back_to_categories$"),
                 CallbackQueryHandler(view_current_order, pattern="^view_current_order$")
             ],
