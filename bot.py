@@ -691,7 +691,7 @@ async def remove_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Видаляємо продукт із замовлення
     removed_item = db.remove_order_item(order_id, category, product_idx)
     
-   if removed_item:
+    if removed_item:
         keyboard = [
             [InlineKeyboardButton("📝 Переглянути оновлене замовлення", callback_data="view_current_order")],
             [InlineKeyboardButton("➕ Додати інші продукти", callback_data="back_to_categories")]
