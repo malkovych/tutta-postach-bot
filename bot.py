@@ -4,10 +4,11 @@
 import os
 import json
 import logging
-import pandas as pd
-import db_mysql as db
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+
+# Імпортуємо модуль для роботи з MySQL
+import db_mysql as db
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -30,11 +31,6 @@ logger = logging.getLogger(__name__)
 # Токен бота Telegram (замініть на свій)
 import os
 TOKEN = os.environ.get("BOT_TOKEN", "7973829035:AAHylWqTFczrGNkqhpOQcGUK1BqjhV3ogeM")
-# Шлях до файлу Excel з інгредієнтами
-INGREDIENTS_FILE = "export_ingredients_250425.xlsx"
-
-# Зберігання даних про замовлення
-DATABASE_FILE = "kitchen_orders_db.json"
 
 # Додаткові стани для реєстрації
 (
@@ -42,14 +38,6 @@ DATABASE_FILE = "kitchen_orders_db.json"
     SELECTING_PRODUCT, VIEWING_ORDER, CONFIRMING_ORDER,
     REGISTRATION_ROLE, SUPPLIER_CATEGORIES, SUPPLIER_PHONE
 ) = range(9)
-
-# Структура для зберігання даних
-db = {
-    "users": {},
-    "orders": [],
-    "products": {},
-    "suppliers": {}
-}
 
 # Початок роботи з ботом та реєстрація
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -76,7 +64,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         
         return REGISTRATION_ROLE
-        
+
 # Обробка вибору ролі
 async def register_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -117,23 +105,33 @@ async def show_supplier_categories(update: Update, context: ContextTypes.DEFAULT
     user_id = str(query.from_user.id)
     
     # Перевірка наявності даних користувача
-    if user_id not in db["users"]:
+    user_data = db.get_user(user_id)
+    if not user_data:
         await context.bot.send_message(
             chat_id=chat_id,
             text="Помилка: користувач не знайдений. Почніть знову з /start"
         )
         return ConversationHandler.END
     
-    # Ініціалізуємо список обраних категорій, якщо його ще немає
-    if "supplier_categories" not in db["users"][user_id]:
-        db["users"][user_id]["supplier_categories"] = []
+    # Отримуємо всі категорії
+    categories = db.get_categories()
+    if not categories:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Помилка: не вдалося отримати категорії. Спробуйте пізніше."
+        )
+        return ConversationHandler.END
+    
+    # Отримуємо обрані категорії постачальника
+    supplier_id = f"supplier_{user_id}"
+    selected_categories = db.get_supplier_categories(supplier_id)
     
     keyboard = []
     
     # Створюємо кнопки для кожної категорії
-    for category in db["products"].keys():
+    for category in categories.keys():
         # Визначаємо, чи обрана категорія
-        is_selected = category in db["users"][user_id]["supplier_categories"]
+        is_selected = category in selected_categories
         button_text = f"✅ {category}" if is_selected else f"⬜ {category}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"supplier_cat_{category}")])
     
@@ -157,10 +155,13 @@ async def process_supplier_category(update: Update, context: ContextTypes.DEFAUL
     
     user_id = str(query.from_user.id)
     data = query.data
+    supplier_id = f"supplier_{user_id}"
     
     if data == "supplier_categories_done":
         # Завершення вибору категорій
-        if not db["users"][user_id].get("supplier_categories"):
+        selected_categories = db.get_supplier_categories(supplier_id)
+        
+        if not selected_categories:
             # Якщо не обрано жодної категорії
             await query.edit_message_text(
                 "Ви не обрали жодної категорії. Будь ласка, оберіть хоча б одну категорію продуктів."
@@ -188,14 +189,23 @@ async def process_supplier_category(update: Update, context: ContextTypes.DEFAUL
     else:
         # Обробка вибору категорії
         category = data.replace("supplier_cat_", "")
+        category_id = db.get_category_id_by_name(category)
         
-        # Змінюємо вибір категорії (додаємо або видаляємо)
-        if category in db["users"][user_id]["supplier_categories"]:
-            db["users"][user_id]["supplier_categories"].remove(category)
+        if not category_id:
+            await query.edit_message_text(
+                f"Помилка: категорія '{category}' не знайдена."
+            )
+            return await show_supplier_categories(update, context)
+        
+        # Перевіряємо, чи вже обрана категорія
+        selected_categories = db.get_supplier_categories(supplier_id)
+        
+        if category in selected_categories:
+            # Видаляємо категорію
+            db.remove_supplier_category(supplier_id, category_id)
         else:
-            db["users"][user_id]["supplier_categories"].append(category)
-        
-        save_db()
+            # Додаємо категорію
+            db.add_supplier_category(supplier_id, category_id)
         
         # Оновлюємо повідомлення з категоріями
         return await show_supplier_categories(update, context)
@@ -211,27 +221,23 @@ async def process_supplier_phone(update: Update, context: ContextTypes.DEFAULT_T
         phone = update.message.text.strip()
     
     # Зберігаємо номер телефону
-    db["users"][user_id]["phone"] = phone
-    db["users"][user_id]["is_registered"] = True
+    db.update_user(user_id, {"phone": phone, "is_registered": True})
     
     # Додаємо користувача до списку постачальників
     supplier_id = f"supplier_{user_id}"
-    db["suppliers"][supplier_id] = {
-        "user_id": user_id,
-        "name": db["users"][user_id]["name"],
-        "phone": phone,
-        "categories": db["users"][user_id]["supplier_categories"],
-        "registration_date": datetime.now().isoformat(),
-        "active": True
-    }
+    user_data = db.get_user(user_id)
     
-    save_db()
+    # Створюємо постачальника
+    db.create_supplier(supplier_id, user_id, user_data["name"], phone)
+    
+    # Отримуємо обрані категорії
+    selected_categories = db.get_supplier_categories(supplier_id)
     
     # Повідомляємо про успішну реєстрацію
     await update.message.reply_text(
         f"Дякуємо! Ви успішно зареєстровані як постачальник.\n\n"
         f"Ви будете отримувати замовлення для категорій:\n"
-        f"{', '.join(db['users'][user_id]['supplier_categories'])}\n\n"
+        f"{', '.join(selected_categories)}\n\n"
         f"Ваш контактний номер: {phone}",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -253,7 +259,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, new
     user_id = str(update.effective_user.id)
     
     # Перевіряємо, чи зареєстрований користувач
-    if user_id not in db["users"] or not db["users"][user_id].get("is_registered", False):
+    user_data = db.get_user(user_id)
+    
+    if not user_data or not user_data.get("is_registered", False):
         if hasattr(update, "message"):
             await update.message.reply_text(
                 "Ви не зареєстровані. Будь ласка, почніть з команди /start"
@@ -266,7 +274,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, new
         return ConversationHandler.END
     
     # Визначаємо роль користувача
-    user_role = db["users"][user_id].get("role", "kitchen")
+    user_role = user_data.get("role", "kitchen")
     
     if user_role == "kitchen":
         # Меню для працівника кухні
@@ -319,21 +327,15 @@ async def new_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if data == "new_order_planned" or data == "new_order_urgent":
         order_type = "planned" if data == "new_order_planned" else "urgent"
         
+        # Отримати дані користувача
+        user_data = db.get_user(user_id)
+        
         # Створення нового замовлення
         order_id = f"{datetime.now().timestamp()}"
-        new_order = {
-            "id": order_id,
-            "type": order_type,
-            "user_id": user_id,
-            "user_name": db["users"][user_id]["name"],
-            "date": datetime.now().isoformat(),
-            "status": "draft",
-            "items": {}
-        }
+        db.create_order(order_id, order_type, user_id, user_data["name"])
         
-        db["orders"].append(new_order)
-        db["users"][user_id]["current_order"] = order_id
-        save_db()
+        # Оновлюємо поточне замовлення користувача
+        db.update_user(user_id, {"current_order": order_id})
         
         return await show_categories(update, context)
     
@@ -357,25 +359,15 @@ async def show_supplier_orders(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = str(query.from_user.id)
     
     # Перевіряємо, чи користувач є постачальником
-    if user_id not in db["users"] or db["users"][user_id].get("role") != "supplier":
+    user_data = db.get_user(user_id)
+    if not user_data or user_data.get("role") != "supplier":
         await query.edit_message_text(
             "У вас немає доступу до цього розділу."
         )
         return MAIN_MENU
     
-    # Отримуємо категорії, які постачає постачальник
-    supplier_categories = db["users"][user_id].get("supplier_categories", [])
-    
-    # Шукаємо замовлення з підтвердженим статусом, які містять продукти з категорій постачальника
-    relevant_orders = []
-    
-    for order in db["orders"]:
-        if order["status"] == "confirmed":
-            # Перевіряємо, чи замовлення містить продукти з категорій постачальника
-            for category in supplier_categories:
-                if category in order["items"] and order["items"][category]:
-                    relevant_orders.append(order)
-                    break
+    # Отримуємо замовлення для постачальника
+    relevant_orders = db.get_relevant_orders_for_supplier(user_id)
     
     if not relevant_orders:
         await query.edit_message_text(
@@ -400,12 +392,11 @@ async def show_supplier_orders(update: Update, context: ContextTypes.DEFAULT_TYP
         message += "*Продукти для вас:*\n"
         
         # Відображаємо тільки категорії, які стосуються постачальника
-        for category in supplier_categories:
-            if category in order["items"] and order["items"][category]:
-                message += f"*{category}:*\n"
-                for item in order["items"][category]:
-                    message += f"- {item}\n"
-                message += "\n"
+        for category, products in order["items"].items():
+            message += f"*{category}:*\n"
+            for item in products:
+                message += f"- {item}\n"
+            message += "\n"
         
         message += "------------\n\n"
     
@@ -424,19 +415,22 @@ async def show_supplier_settings(update: Update, context: ContextTypes.DEFAULT_T
     
     user_id = str(query.from_user.id)
     
-    if user_id not in db["users"] or db["users"][user_id].get("role") != "supplier":
+    # Перевіряємо, чи користувач є постачальником
+    user_data = db.get_user(user_id)
+    if not user_data or user_data.get("role") != "supplier":
         await query.edit_message_text(
             "У вас немає доступу до цього розділу."
         )
         return MAIN_MENU
     
-    # Отримуємо дані постачальника
-    supplier_data = db["users"][user_id]
+    # Отримуємо категорії постачальника
+    supplier_id = f"supplier_{user_id}"
+    categories = db.get_supplier_categories(supplier_id)
     
     message = "*⚙️ Налаштування постачальника*\n\n"
-    message += f"Ім'я: {supplier_data.get('name')}\n"
-    message += f"Телефон: {supplier_data.get('phone')}\n"
-    message += f"Категорії: {', '.join(supplier_data.get('supplier_categories', []))}\n"
+    message += f"Ім'я: {user_data.get('name')}\n"
+    message += f"Телефон: {user_data.get('phone')}\n"
+    message += f"Категорії: {', '.join(categories)}\n"
     
     keyboard = [
         [InlineKeyboardButton("📋 Змінити категорії", callback_data="change_categories")],
@@ -461,10 +455,13 @@ async def show_categories(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         chat_id = update.effective_chat.id
     
+    # Отримуємо категорії
+    categories = db.get_categories()
+    
     keyboard = []
     
     # Створення кнопок для кожної категорії
-    for category in db["products"].keys():
+    for category in categories.keys():
         keyboard.append([InlineKeyboardButton(category, callback_data=f"category_{category}")])
     
     keyboard.append([InlineKeyboardButton("📝 Переглянути поточне замовлення", callback_data="view_current_order")])
@@ -493,7 +490,10 @@ async def show_products_in_category(update: Update, context: ContextTypes.DEFAUL
     category = query.data.replace("category_", "")
     context.user_data["current_category"] = category
     
-    products = db["products"].get(category, [])
+    # Отримуємо продукти категорії
+    categories = db.get_categories()
+    products = categories.get(category, [])
+    
     keyboard = []
     
     # Створення кнопок для кожного продукту
@@ -528,27 +528,47 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         )
         return MAIN_MENU
     
-    order_id = db["users"][user_id]["current_order"]
+    # Отримуємо поточне замовлення користувача
+    user_data = db.get_user(user_id)
+    order_id = user_data.get("current_order")
     
-    if not order_id or not any(o["id"] == order_id for o in db["orders"]):
+    if not order_id:
         await query.edit_message_text(
             "Помилка: Немає активного замовлення. Створіть нове замовлення.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
         )
         return MAIN_MENU
     
-    # Знаходимо замовлення
-    order = next((o for o in db["orders"] if o["id"] == order_id), None)
-    product = db["products"][category][product_idx]
+    # Отримуємо продукт за індексом
+    categories = db.get_categories()
+    products = categories.get(category, [])
     
-    # Додаємо продукт до замовлення
-    if category not in order["items"]:
-        order["items"][category] = []
+    if product_idx >= len(products):
+        await query.edit_message_text(
+            "Помилка: Продукт не знайдено.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
+        )
+        return MAIN_MENU
+    
+    product = products[product_idx]
+    
+    # Перевіряємо замовлення
+    order = db.get_order(order_id)
+    if not order:
+        await query.edit_message_text(
+            "Помилка: Замовлення не знайдено.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
+        )
+        return MAIN_MENU
     
     # Перевіряємо, чи вже є такий продукт у замовленні
-    if product not in order["items"][category]:
-        order["items"][category].append(product)
-        save_db()
+    is_product_in_order = False
+    if category in order["items"] and product in order["items"][category]:
+        is_product_in_order = True
+    
+    if not is_product_in_order:
+        # Додаємо продукт до замовлення
+        db.add_order_item(order_id, category, product)
         
         keyboard = [
             [InlineKeyboardButton("➕ Додати ще з цієї категорії", callback_data=f"category_{category}")],
@@ -587,28 +607,38 @@ async def view_current_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     user_id = str(query.from_user.id)
-    order_id = db["users"][user_id]["current_order"]
     
-    if not order_id or not any(o["id"] == order_id for o in db["orders"]):
+    # Отримуємо поточне замовлення користувача
+    user_data = db.get_user(user_id)
+    order_id = user_data.get("current_order")
+    
+    if not order_id:
         await query.edit_message_text(
             "У вас немає активного замовлення. Створіть нове через головне меню.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
         )
         return MAIN_MENU
     
-    order = next((o for o in db["orders"] if o["id"] == order_id), None)
+    # Отримуємо замовлення
+    order = db.get_order(order_id)
+    if not order:
+        await query.edit_message_text(
+            "Помилка: Замовлення не знайдено.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
+        )
+        return MAIN_MENU
     
     message = f"📋 *Ваше поточне замовлення*\n"
     message += f"Тип: {'🗓 Планове' if order['type'] == 'planned' else '⚡ Термінове'}\n"
     message += f"Статус: {get_status_emoji(order['status'])} {get_status_text(order['status'])}\n\n"
     
     has_items = False
-    for category in order["items"]:
-        if order["items"][category]:
+    for category, products in order["items"].items():
+        if products:
             has_items = True
             message += f"*{category}*:\n"
             
-            for idx, item in enumerate(order["items"][category]):
+            for idx, item in enumerate(products):
                 message += f"{idx + 1}. {item} (/remove_{category}_{idx})\n"
             
             message += "\n"
@@ -650,24 +680,18 @@ async def remove_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Неправильний індекс продукту.")
         return
     
-    order_id = db["users"][user_id]["current_order"]
+    # Отримуємо поточне замовлення користувача
+    user_data = db.get_user(user_id)
+    order_id = user_data.get("current_order")
     
-    if not order_id or not any(o["id"] == order_id for o in db["orders"]):
+    if not order_id:
         await update.message.reply_text("Помилка: Немає активного замовлення.")
         return
     
-    order = next((o for o in db["orders"] if o["id"] == order_id), None)
+    # Видаляємо продукт із замовлення
+    removed_item = db.remove_order_item(order_id, category, product_idx)
     
-    if category in order["items"] and product_idx < len(order["items"][category]):
-        removed_item = order["items"][category][product_idx]
-        order["items"][category].pop(product_idx)
-        
-        # Якщо категорія стала порожньою, видаляємо її
-        if not order["items"][category]:
-            del order["items"][category]
-        
-        save_db()
-        
+   if removed_item:
         keyboard = [
             [InlineKeyboardButton("📝 Переглянути оновлене замовлення", callback_data="view_current_order")],
             [InlineKeyboardButton("➕ Додати інші продукти", callback_data="back_to_categories")]
@@ -686,23 +710,29 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await query.answer()
     
     user_id = str(query.from_user.id)
-    order_id = db["users"][user_id]["current_order"]
     
-    if not order_id or not any(o["id"] == order_id for o in db["orders"]):
+    # Отримуємо поточне замовлення користувача
+    user_data = db.get_user(user_id)
+    order_id = user_data.get("current_order")
+    
+    if not order_id:
         await query.edit_message_text(
             "Помилка: Немає активного замовлення.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
         )
         return MAIN_MENU
     
-    order = next((o for o in db["orders"] if o["id"] == order_id), None)
+    # Отримуємо замовлення
+    order = db.get_order(order_id)
+    if not order:
+        await query.edit_message_text(
+            "Помилка: Замовлення не знайдено.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 На головну", callback_data="home")]])
+        )
+        return MAIN_MENU
     
     # Перевіряємо, чи не порожнє замовлення
-    has_items = False
-    for category in order["items"]:
-        if order["items"][category]:
-            has_items = True
-            break
+    has_items = any(products for products in order["items"].values())
     
     if not has_items:
         await query.edit_message_text(
@@ -712,48 +742,55 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return SELECTING_CATEGORY
     
     # Змінюємо статус замовлення
-    order["status"] = "confirmed"
-    order["confirmation_date"] = datetime.now().isoformat()
+    db.update_order_status(order_id, "confirmed")
     
     # Видаляємо прив'язку до поточного замовлення користувача
-    db["users"][user_id]["current_order"] = None
+    db.update_user(user_id, {"current_order": None})
     
-    save_db()
-    
-    # Надсилаємо повідомлення кожному постачальнику, який постачає категорії з замовлення
-    for supplier_id, supplier in db["suppliers"].items():
-        supplier_categories = supplier.get("categories", [])
+    # Отримуємо всіх постачальників
+    suppliers = []
+    for supplier_id, supplier_data in db.get_suppliers():
+        supplier_categories = db.get_supplier_categories(supplier_id)
         
         # Перевіряємо, чи постачальник постачає будь-яку з категорій у замовленні
-        relevant_categories = [cat for cat in supplier_categories if cat in order["items"] and order["items"][cat]]
+        relevant_categories = [cat for cat in supplier_categories if cat in order["items"]]
         
         if relevant_categories:
-            # Формуємо повідомлення для постачальника
-            supplier_message = f"📋 *НОВЕ ЗАМОВЛЕННЯ*\n"
-            supplier_message += f"Тип: {'🗓 Планове' if order['type'] == 'planned' else '⚡ Термінове'}\n"
-            supplier_message += f"ID: {order['id']}\n"
-            supplier_message += f"Від: {order['user_name']}\n"
-            supplier_message += f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-            
-            supplier_message += "*Продукти для постачання:*\n"
-            
-            for category in relevant_categories:
+            suppliers.append({
+                "user_id": supplier_data["user_id"],
+                "name": supplier_data["name"],
+                "categories": relevant_categories
+            })
+    
+    # Надсилаємо повідомлення кожному постачальнику, який постачає категорії з замовлення
+    for supplier in suppliers:
+        # Формуємо повідомлення для постачальника
+        supplier_message = f"📋 *НОВЕ ЗАМОВЛЕННЯ*\n"
+        supplier_message += f"Тип: {'🗓 Планове' if order['type'] == 'planned' else '⚡ Термінове'}\n"
+        supplier_message += f"ID: {order['id']}\n"
+        supplier_message += f"Від: {order['user_name']}\n"
+        supplier_message += f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+        
+        supplier_message += "*Продукти для постачання:*\n"
+        
+        for category in supplier["categories"]:
+            if category in order["items"] and order["items"][category]:
                 supplier_message += f"*{category}:*\n"
                 for item in order["items"][category]:
                     supplier_message += f"- {item}\n"
                 supplier_message += "\n"
+        
+        # Надсилаємо повідомлення постачальнику
+        try:
+            await context.bot.send_message(
+                chat_id=supplier["user_id"],
+                text=supplier_message,
+                parse_mode="Markdown"
+            )
             
-            # Надсилаємо повідомлення постачальнику
-            try:
-                await context.bot.send_message(
-                    chat_id=supplier["user_id"],
-                    text=supplier_message,
-                    parse_mode="Markdown"
-                )
-                
-                logger.info(f"Надіслано повідомлення постачальнику {supplier['name']} (ID: {supplier['user_id']})")
-            except Exception as e:
-                logger.error(f"Помилка при надсиланні повідомлення постачальнику {supplier['name']}: {e}")
+            logger.info(f"Надіслано повідомлення постачальнику {supplier['name']} (ID: {supplier['user_id']})")
+        except Exception as e:
+            logger.error(f"Помилка при надсиланні повідомлення постачальнику {supplier['name']}: {e}")
     
     await query.edit_message_text(
         "✅ Ваше замовлення успішно підтверджено та надіслано постачальникам!\n\n"
@@ -772,7 +809,9 @@ async def view_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     
     user_id = str(query.from_user.id)
-    user_orders = [o for o in db["orders"] if o["user_id"] == user_id]
+    
+    # Отримуємо замовлення користувача
+    user_orders = db.get_user_orders(user_id)
     
     if not user_orders:
         await query.edit_message_text(
@@ -782,9 +821,6 @@ async def view_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return MAIN_MENU
     
     message = "*📋 Ваші замовлення:*\n\n"
-    
-    # Сортуємо замовлення за датою (найновіші спочатку)
-    user_orders.sort(key=lambda x: x["date"], reverse=True)
     
     for idx, order in enumerate(user_orders[:5]):  # Показуємо лише 5 останніх замовлень для простоти
         message += f"{get_status_emoji(order['status'])} *Замовлення #{idx + 1}*\n"
@@ -797,7 +833,7 @@ async def view_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         message += f"Статус: {get_status_text(order['status'])}\n"
         
         # Підрахунок позицій
-        item_count = sum(len(items) for items in order["items"].values())
+        item_count = sum(len(products) for products in order["items"].values())
         message += f"Кількість найменувань: {item_count}\n\n"
     
     await query.edit_message_text(
@@ -867,9 +903,6 @@ def main() -> None:
             logger.info("Підключення до бази даних успішне")
         else:
             logger.error("Не вдалося підключитися до бази даних")
-    
-    # Завантажуємо дані
-    load_db()
     
     # Створюємо ConversationHandler для управління розмовою
     conv_handler = ConversationHandler(
