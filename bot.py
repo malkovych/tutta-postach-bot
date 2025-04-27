@@ -950,15 +950,6 @@ async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 def main() -> None:
     # Створюємо застосунок і передаємо йому токен нашого бота
     application = Application.builder().token(TOKEN).build()
-    # Додаємо обробники
-    application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("menu", menu_command))  # Додаємо команду для меню
-    application.add_handler(MessageHandler(filters.COMMAND & filters.Regex("^/remove_"), remove_product))
-    application.add_handler(CallbackQueryHandler(go_home, pattern="^home$"))
-    application.add_handler(CallbackQueryHandler(show_suppliers_list, pattern="^suppliers_list$"))  # Додаємо обробник списку постачальників
-    application.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))  # Обробник кнопки допомоги
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
     
     # Перевіряємо підключення до бази даних
     if hasattr(db, 'test_connection'):
@@ -984,7 +975,8 @@ def main() -> None:
             MAIN_MENU: [
                 CallbackQueryHandler(new_order, pattern="^new_order_|^supplier_"),
                 CallbackQueryHandler(view_my_orders, pattern="^my_orders$"),
-                CallbackQueryHandler(go_home, pattern="^home$")
+                CallbackQueryHandler(go_home, pattern="^home$"),
+                CallbackQueryHandler(show_suppliers_list, pattern="^suppliers_list$")
             ],
             SELECTING_CATEGORY: [
                 CallbackQueryHandler(show_products_in_category, pattern="^category_"),
@@ -1008,9 +1000,24 @@ def main() -> None:
         },
         fallbacks=[
             CommandHandler("help", help_command),
-            CommandHandler("start", start)
+            CommandHandler("start", start),
+            CommandHandler("menu", menu_command)
         ],
     )
+    
+    # Додаємо обробники
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("menu", menu_command))
+    application.add_handler(MessageHandler(filters.COMMAND & filters.Regex("^/remove_"), remove_product))
+    application.add_handler(CallbackQueryHandler(go_home, pattern="^home$"))
+    application.add_handler(CallbackQueryHandler(show_suppliers_list, pattern="^suppliers_list$"))
+    application.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
+    
+    # Запускаємо бота
+    print("Бот запущено!")
+    application.run_polling()
 
 # Показ головного меню з командами
 async def show_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
